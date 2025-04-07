@@ -122,109 +122,204 @@ int custom_many2many(int *send_data, int *sendcounts, int** recv_data_ptr, int r
 
 
 
-void custom_allreduce_sum(int *local, int *global, int num_elem, int rank, int size) {
-  //CHECK IF WE ARE AN EXTRA PROC SHOULD WE SKIP HYPERCUBIC
+// void custom_allreduce_sum(int *local, int *global, int num_elem, int rank, int size) {
+//   //CHECK IF WE ARE AN EXTRA PROC SHOULD WE SKIP HYPERCUBIC
 
 
-  // Damn rank and size given
+//   // Damn rank and size given
 
-  // // First find rank and size
-  // int rank, size;
-  // MPI_Comm_rank(comm, &rank); // Get curr rank and size
-  // MPI_Comm_size(comm, &size);
+//   // // First find rank and size
+//   // int rank, size;
+//   // MPI_Comm_rank(comm, &rank); // Get curr rank and size
+//   // MPI_Comm_size(comm, &size);
 
-  //In order to perform a hypercube reduction, we need a power of two processors.
-  //Need to first determine the largest 2^k (m) less than or equal to size.
-  //This is our "main" group for the hypercube reduction.
-  int main = 1;
-  while (main * 2 <= size) {
-      main *= 2;
-  }
-  //Now need to figure out number of processors more than this.
-  int extra_count = size - main;
+//   //In order to perform a hypercube reduction, we need a power of two processors.
+//   //Need to first determine the largest 2^k (m) less than or equal to size.
+//   //This is our "main" group for the hypercube reduction.
+//   int main = 1;
+//   while (main * 2 <= size) {
+//       main *= 2;
+//   }
+//   //Now need to figure out number of processors more than this.
+//   int extra_count = size - main;
 
-  //Eextra processors (ranks m to size-1)
-  //Idea is to send data from these "extra" processors to a designated processor within the main hypercube group
-  //Each extra processor w rank r sends to process (r - m) - so each main processors has to deal with at most one extra proc
+//   //Eextra processors (ranks m to size-1)
+//   //Idea is to send data from these "extra" processors to a designated processor within the main hypercube group
+//   //Each extra processor w rank r sends to process (r - m) - so each main processors has to deal with at most one extra proc
 
-  //--------------------------------------------------------------------------
-  if (rank >= main) { // If the current processor is an extra one.
-      int designated = rank - main;  // Map extra process to a main group process
-      //Send the local array to the designated process.
-      MPI_Send(local, num_elem, MPI_INT, designated, 0, MPI_COMM_WORLD);
-      //After the main group computes the global sum, receive the final result
-      MPI_Recv(global, num_elem, MPI_INT, designated, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE); // This occurs at the very end of fn
-      //Extra processes are done after receiving the global sum - no longer need to deal with these as their numbers have been shipped off
-      return;
-  } else {
-      //Main group proc
-      //If this proc is designated to receive data from an extra process - i.e. it has rank 0 to extra_count-1
-      //Then run that reception first.
-      if (rank < extra_count) { // Check as per above
-          int source = rank + main;  // The extra process it is recieving stuff from.
-          int *temp_buf = new int[num_elem];
-          //Receive the extra process's local arr
-          MPI_Recv(temp_buf, num_elem, MPI_INT, source, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-          //Add the received data element-wise into current proc local array.
-          for (int i = 0; i < num_elem; i++) {
-              local[i] += temp_buf[i];
-          }
-          delete [] temp_buf;
-      }
-  }
+//   //--------------------------------------------------------------------------
+//   if (rank >= main) { // If the current processor is an extra one.
+//       int designated = rank - main;  // Map extra process to a main group process
+//       //Send the local array to the designated process.
+//       MPI_Send(local, num_elem, MPI_INT, designated, 0, MPI_COMM_WORLD);
+//       //After the main group computes the global sum, receive the final result
+//       MPI_Recv(global, num_elem, MPI_INT, designated, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE); // This occurs at the very end of fn
+//       //Extra processes are done after receiving the global sum - no longer need to deal with these as their numbers have been shipped off
+//       return;
+//   } else {
+//       //Main group proc
+//       //If this proc is designated to receive data from an extra process - i.e. it has rank 0 to extra_count-1
+//       //Then run that reception first.
+//       if (rank < extra_count) { // Check as per above
+//           int source = rank + main;  // The extra process it is recieving stuff from.
+//           int *temp_buf = new int[num_elem];
+//           //Receive the extra process's local arr
+//           MPI_Recv(temp_buf, num_elem, MPI_INT, source, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+//           //Add the received data element-wise into current proc local array.
+//           for (int i = 0; i < num_elem; i++) {
+//               local[i] += temp_buf[i];
+//           }
+//           delete [] temp_buf;
+//       }
+//   }
 
-  //--------------------------------------------------------------------------
-  //Now time to actually run Hypercube reduction among the main group (ranks 0 to m-1)
-  //log2(m) rounds.
-  //In each round, each process exchanges its current partial sum with a partner (found via XORing the rank with 2^i for round i)
-  //THen sum arrays
-  int rounds = 0;
-  int temp = main;
-  while (temp > 1) { // Log base 2 finder lol
-      rounds++;
-      temp /= 2;
-  }
+//   //--------------------------------------------------------------------------
+//   //Now time to actually run Hypercube reduction among the main group (ranks 0 to m-1)
+//   //log2(m) rounds.
+//   //In each round, each process exchanges its current partial sum with a partner (found via XORing the rank with 2^i for round i)
+//   //THen sum arrays
+//   int rounds = 0;
+//   int temp = main;
+//   while (temp > 1) { // Log base 2 finder lol
+//       rounds++;
+//       temp /= 2;
+//   }
 
-  for (int i = 0; i < rounds; i++) { //Iterate over rounds
-      //Find partner
-      int partner = rank ^ (1 << i);
+//   for (int i = 0; i < rounds; i++) { //Iterate over rounds
+//       //Find partner
+//       int partner = rank ^ (1 << i);
       
-      //Temp buffer to hold partner's data.
-      int *recv_buf = new int[num_elem];
+//       //Temp buffer to hold partner's data.
+//       int *recv_buf = new int[num_elem];
  
-      //Only allowed Send + Recv, so to avoid deadlock with blocking calls, order send/recv based on rank.
-      if (rank < partner) {
-          //Rrank is lower -> send first then receive.
-          MPI_Send(local, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD);
-          MPI_Recv(recv_buf, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-      } else {
-          //Else -> receive first then send.
-          MPI_Recv(recv_buf, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-          MPI_Send(local, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD);
-      }
+//       //Only allowed Send + Recv, so to avoid deadlock with blocking calls, order send/recv based on rank.
+//       if (rank < partner) {
+//           //Rrank is lower -> send first then receive.
+//           MPI_Send(local, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD);
+//           MPI_Recv(recv_buf, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+//       } else {
+//           //Else -> receive first then send.
+//           MPI_Recv(recv_buf, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+//           MPI_Send(local, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD);
+//       }
       
-      //Element-wise addition: combine received partial sum into our local sum.
-      //The local sum array keeps getting filled
-      for (int j = 0; j < num_elem; j++) {
-          local[j] += recv_buf[j];
-      }
-      delete [] recv_buf;
-  }
+//       //Element-wise addition: combine received partial sum into our local sum.
+//       //The local sum array keeps getting filled
+//       for (int j = 0; j < num_elem; j++) {
+//           local[j] += recv_buf[j];
+//       }
+//       delete [] recv_buf;
+//   }
 
-  //--------------------------------------------------------------------------
-  //At this point, every process in the main group has the complete global sum.
-  //Deep copy result into the global array.
-  for (int i = 0; i < num_elem; i++) {
-      global[i] = local[i];
-  }
+//   //--------------------------------------------------------------------------
+//   //At this point, every process in the main group has the complete global sum.
+//   //Deep copy result into the global array.
+//   for (int i = 0; i < num_elem; i++) {
+//       global[i] = local[i];
+//   }
 
-  //--------------------------------------------------------------------------
-  //Now neeed to send the global result to extra processes (if any) -> recall we taked about this earlier when we were making extra procs
-  //The designated main group processes send the final result to their corresponding extra proc.
-  if (rank < extra_count) {
-      int dest = rank + main;  // Corresponding to this main process.
-      MPI_Send(global, num_elem, MPI_INT, dest, 0, MPI_COMM_WORLD);
-  }
+//   //--------------------------------------------------------------------------
+//   //Now neeed to send the global result to extra processes (if any) -> recall we taked about this earlier when we were making extra procs
+//   //The designated main group processes send the final result to their corresponding extra proc.
+//   if (rank < extra_count) {
+//       int dest = rank + main;  // Corresponding to this main process.
+//       MPI_Send(global, num_elem, MPI_INT, dest, 0, MPI_COMM_WORLD);
+//   }
 
-  //Now all procs should have the overall global sum
+//   //Now all procs should have the overall global sum
+// }
+void custom_allreduce_sum(int *local, int *global, int num_elem, int rank, int size) {
+    // Save the original local array for validation.
+    int *original = new int[num_elem];
+    for (int i = 0; i < num_elem; i++) {
+        original[i] = local[i];
+    }
+
+    // Determine main group size: largest power of two <= size.
+    int main = 1;
+    while (main * 2 <= size) {
+        main *= 2;
+    }
+    int extra_count = size - main;
+
+    // For extra processors, send local array to designated main process and receive global result.
+    if (rank >= main) {
+        int designated = rank - main;
+        MPI_Send(local, num_elem, MPI_INT, designated, 0, MPI_COMM_WORLD);
+        MPI_Recv(global, num_elem, MPI_INT, designated, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        
+        // Validate against MPI_Allreduce.
+        int *mpi_global = new int[num_elem];
+        MPI_Allreduce(original, mpi_global, num_elem, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+        for (int i = 0; i < num_elem; i++) {
+            if (global[i] != mpi_global[i]) {
+                fprintf(stderr, "Validation failed on rank %d at index %d: custom = %d, MPI = %d\n",
+                        rank, i, global[i], mpi_global[i]);
+                assert(0);
+            }
+        }
+        delete[] mpi_global;
+        delete[] original;
+        return;
+    } else {
+        // Main group: if designated to receive from an extra process, add that data first.
+        if (rank < extra_count) {
+            int source = rank + main;
+            int *temp_buf = new int[num_elem];
+            MPI_Recv(temp_buf, num_elem, MPI_INT, source, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            for (int i = 0; i < num_elem; i++) {
+                local[i] += temp_buf[i];
+            }
+            delete[] temp_buf;
+        }
+    }
+
+    // Perform hypercube reduction among the main group.
+    int rounds = 0;
+    int temp = main;
+    while (temp > 1) {
+        rounds++;
+        temp /= 2;
+    }
+    for (int i = 0; i < rounds; i++) {
+        int partner = rank ^ (1 << i);
+        int *recv_buf = new int[num_elem];
+        if (rank < partner) {
+            MPI_Send(local, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD);
+            MPI_Recv(recv_buf, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        } else {
+            MPI_Recv(recv_buf, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            MPI_Send(local, num_elem, MPI_INT, partner, 0, MPI_COMM_WORLD);
+        }
+        // Add partner's data element-wise.
+        for (int j = 0; j < num_elem; j++) {
+            local[j] += recv_buf[j];
+        }
+        delete[] recv_buf;
+    }
+
+    // Copy the result into the global output.
+    for (int i = 0; i < num_elem; i++) {
+        global[i] = local[i];
+    }
+
+    // Send the final global result to corresponding extra processes.
+    if (rank < extra_count) {
+        int dest = rank + main;
+        MPI_Send(global, num_elem, MPI_INT, dest, 0, MPI_COMM_WORLD);
+    }
+
+    // --- Validation ---
+    // Compare the custom result with the result computed by MPI_Allreduce.
+    int *mpi_global = new int[num_elem];
+    MPI_Allreduce(original, mpi_global, num_elem, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    for (int i = 0; i < num_elem; i++) {
+        if (global[i] != mpi_global[i]) {
+            fprintf(stderr, "Validation failed on rank %d at index %d: custom = %d, MPI = %d\n",
+                    rank, i, global[i], mpi_global[i]);
+            assert(0);
+        }
+    }
+    delete[] mpi_global;
+    delete[] original;
 }
