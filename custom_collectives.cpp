@@ -2,6 +2,8 @@
 #include <mpi.h>
 
 #include "custom_collectives.h"
+#include <cassert>
+
 
 
 /*
